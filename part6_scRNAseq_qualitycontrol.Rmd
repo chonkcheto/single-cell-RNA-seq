@@ -1,0 +1,225 @@
+---
+title: "Quality Control (QC) and Exploration of scRNA-seq Datasets"
+output: html_document
+date: "2024-09-02"
+---
+
+Note: There is no standard method for performing scRNA-seq. QC is mostly done by looking for cells that are outliers compared to others in the dataset, i.e., there are no external/independent quality standards. Should be careful and thoughtful when comparing quality metrics across datasets collected/sequenced using different protocols.
+
+## Dataset Construction and QC
+
+Load libraries. Use `suppressPackageStartupMessages` so the start up messages don't show up.
+
+```{r}
+suppressPackageStartupMessages(library(scater))
+suppressPackageStartupMessages(library(SingleCellExperiment))
+suppressPackageStartupMessages(library(AnnotationDbi))
+suppressPackageStartupMessages(library(org.Hs.eg.db))
+suppressPackageStartupMessages(library(EnsDb.Hsapiens.v86))
+```
+
+Load data.
+
+```{r}
+molecules <- read.delim("../course/data/tung/molecules.txt", row.names = 1)
+annotation <- read.delim("../course/data/tung/annotation.txt",stringsAsFactors = T)
+```
+
+Take a look at the data.
+
+```{r}
+head(molecules[,1:3])
+```
+
+```{r}
+head(annotation)
+```
+
+In this dataset, they used both unique molecular identifiers (UMIs) and ERCC spike-ins. We use `altExp` (alternative Experiment) to separate the spike-ins from the main dataset.
+
+```{r}
+umi <- SingleCellExperiment(assays = list(counts = as.matrix(molecules)), colData = annotation)
+altExp(umi, "ERCC") <- umi[grep("^ERCC-", rownames(umi)), ]
+umi <- umi[grep("^ERCC-", rownames(umi), invert = T), ]
+```
+
+Map ENSEMBL IDs to gene symbols.
+
+```{r}
+gene_names <- mapIds(org.Hs.eg.db, keys=rownames(umi), keytype="ENSEMBL", columns="SYMBOL", column="SYMBOL")
+```
+
+mapIds returns one symbol per ID. Using `table` command, find out how many genes were not annotated.
+
+```{r}
+rowData(umi)$SYMBOL <- gene_names
+table(is.na(gene_names))
+```
+
+Remove genes where no symbols matched.
+
+```{r}
+umi <- umi[! is.na(rowData(umi)$SYMBOL), ]
+```
+
+Check if there are any mitochondrial genes in the newly annotated symbols.
+
+```{r}
+grep("^MT-", rowData(umi)$SYMBOL, value = T)
+```
+
+Check for ribosomal proteins (starting with "RPL" or "RPS")
+
+```{r}
+grep("^RP[LS]",rowData(umi)$SYMBOL,value = T)
+```
+
+Note: We should be suspicious if no mitochondrial genes show up in the dataset. Another way to check: search for a known mitochondrial gene, e.g. ATP8 (also called MT-ATP8). In this dataset, the name doesn't contain "MT". However, the correct feature (ENSEMBL ID ENSG00000228253) is present in our annotation.
+
+**Annotation problems in general are very common** and should be always considered carefully.
+
+Most modern annotations, e.g. ones used by Cell Ranger, will have mitochondrial genes names that start with MT. Here we're using `org.Hs.eg.db`, which also doesn't support chromosomes (so we don't know where the genes are located).
+
+```{r}
+columns(org.Hs.eg.db)
+```
+
+Let's try a different database.
+
+```{r}
+ensdb_genes <- genes(EnsDb.Hsapiens.v86)
+MT_names <- ensdb_genes[seqnames(ensdb_genes) == "MT"]$gene_id
+is_mito <- rownames(umi) %in% MT_names
+table(is_mito)
+```
+
+Important QC metrics: **per-cell, per-gene**.
+Popular per-cell metrics: total number of counts (UMIs), total number of detected genes, total number of mitochondrial counts, percent of mitochondrial counts.
+
+```{r}
+umi_cell <- perCellQCMetrics(umi,subsets=list(Mito=is_mito))
+umi_feature <- perFeatureQCMetrics(umi)
+head(umi_cell)
+```
+
+```{r}
+head(umi_feature)
+```
+
+Add calculated metrics above to per-cell and per-gene metadata.
+
+```{r}
+umi <- addPerCellQC(umi, subsets=list(Mito=is_mito))
+umi <- addPerFeatureQC(umi)
+```
+
+Set thresholds for what we consider "high enough quality" genes and cells for downstream analysis. This is done manually; we should take into account the distribution of the dataset. 
+
+```{r}
+hist(
+    umi$total,
+    breaks = 100
+)
+abline(v = 25000, col = "red")
+```
+```{r}
+hist(
+  umi_cell$detected,
+  breaks = 100
+)
+abline(v = 7000, col = "red")
+```
+
+A common strategy is to filter out points that are above 3 median absolute deviations (MAD) in *any* of the QC metrics. **Hallmarks of low-quality cells: low *number* of detected genes, high *percentage* of MT genes.**
+
+```{r}
+qc.lib2 <- isOutlier(umi_cell$sum, log=TRUE, type="lower")
+attr(qc.lib2, "thresholds")
+```
+
+```{r}
+qc.nexprs2 <- isOutlier(umi_cell$detected, log=TRUE, type="lower")
+attr(qc.nexprs2, "thresholds")
+```
+
+```{r}
+qc.spike2 <- isOutlier(umi_cell$altexps_ERCC_percent, type="higher")
+attr(qc.spike2, "thresholds")
+```
+
+```{r}
+qc.mito2 <- isOutlier(umi_cell$subsets_Mito_percent, type="higher")
+attr(qc.mito2, "thresholds")
+```
+
+```{r}
+discard2 <- qc.lib2 | qc.nexprs2 | qc.spike2 | qc.mito2
+DataFrame(LibSize=sum(qc.lib2), NExprs=sum(qc.nexprs2), SpikeProp=sum(qc.spike2), MitoProp=sum(qc.mito2), Total=sum(discard2))
+```
+
+All the actions performed above could be done in one scater command, `quickPerCellQC`:
+
+```{r}
+reasons <- quickPerCellQC(umi_cell, sub.fields=c("subsets_Mito_percent", "altexps_ERCC_percent"))
+colSums(as.matrix(reasons))
+```
+Adding a metadata column to keep info on whether a cell is discarded or not:
+
+```{r}
+umi$discard <- reasons$discard
+```
+
+Never underestimate the usefulness of plotting for QC! Cells with low UMI counts and high % of mitochondrial content are dead or dying.
+
+```{r}
+plotColData(umi, x="sum", y="subsets_Mito_percent", colour_by="discard")
+```
+```{r}
+plotColData(umi, x="sum", y="detected", colour_by="discard")
+```
+
+```{r}
+plotColData(umi, x="altexps_ERCC_percent", y="subsets_Mito_percent",colour_by="discard")
+```
+
+Split by batch to see if there are any batch effects (particularly important for RNAseq). (Reminder: the data are from sequencing of iPSCs from 3 individuals.)
+
+```{r}
+suppressPackageStartupMessages(library(scales))
+plotColData(umi, x="sum", y="detected", colour_by="discard", other_fields = "individual") + 
+  facet_wrap(~individual) + scale_x_continuous(labels = unit_format(unit = "k", scale = 1e-3))
+```
+
+```{r}
+plotColData(umi, x="sum", y="detected", colour_by="discard", other_fields = "replicate") + 
+  facet_wrap(~replicate)  + scale_x_continuous(labels = unit_format(unit = "k", scale = 1e-3))
+```
+
+Now we start having fun! Let's look at highly expressed genes.
+
+```{r}
+plotHighestExprs(umi, exprs_values = "counts", 
+                 feature_names_to_plot = "SYMBOL", colour_cells_by="detected")
+```
+
+Keep genes that are detected (expression value > 1) by at least 2 cells.
+
+```{r}
+keep_feature <- nexprs(umi,byrow = TRUE,detection_limit = 1) >= 2
+rowData(umi)$discard <- ! keep_feature
+table(rowData(umi)$discard)
+```
+
+Make a new assay: `logcounts_raw` using log2-transformed counts with pseudocount 1, because we don't want to break the machine by making it calculate log2(0).
+
+```{r}
+assay(umi, "logcounts_raw") <- log2(counts(umi) + 1)
+```
+
+Save it to the `tung` folder for further analysis.
+
+```{r}
+saveRDS(umi, file = "../course/data/tung/umi.rds")
+```
+
+## Next up: Data Visualization and Dimensionality Reduction
