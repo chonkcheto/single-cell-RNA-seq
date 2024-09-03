@@ -1,6 +1,6 @@
 # single-cell-RNA-seq
 
-Recreating analyses and visualizations from fun papers featuring scRNA-seq
+Recreating analyses and visualizations from fun papers featuring scRNA-seq. Following tutorial published in [Andrews et al, 2021](https://www.nature.com/articles/s41596-020-00409-w) at this [course link](https://www.singlecellcourse.org/)
 
 ## [Quality Control](quality_control/part6_scRNAseq_qualitycontrol.md)
 
