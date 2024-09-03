@@ -8,7 +8,7 @@ dataset, i.e., there are no external/independent quality standards.
 Should be careful and thoughtful when comparing quality metrics across
 datasets collected/sequenced using different protocols.
 
-## Dataset Construction and QC
+### Dataset Construction and QC
 
 Load libraries. Use `suppressPackageStartupMessages` so the start up
 messages don’t show up.
@@ -408,4 +408,577 @@ Save it to the `tung` folder for further analysis.
 saveRDS(umi, file = "course/data/tung/umi.rds")
 ```
 
-## Next up: Data Visualization and Dimensionality Reduction
+### Data Visualization and Dimensionality Reduction
+
+Create another `SingleCellExperiment` where poorly expressed genes and
+low quality cells are removed.
+
+``` r
+umi.qc <- umi[! rowData(umi)$discard,! colData(umi)$discard]
+```
+
+If we run PCA without transformation or normalization, we mostly see the
+effects of sequencing depth, i.e., cells with lots of expression and
+especially highly expressed genes dominate the principal components.
+
+``` r
+umi <- runPCA(umi, exprs_values = "counts")
+dim(reducedDim(umi, "PCA"))
+```
+
+    ## [1] 864  50
+
+``` r
+plotPCA(umi, colour_by = "batch", size_by = "detected", shape_by = "individual")
+```
+
+![](part6_scRNAseq_qualitycontrol_files/figure-gfm/unnamed-chunk-36-1.png)<!-- -->
+
+Re-run PCA with log-transformed counts.
+
+``` r
+umi <- runPCA(umi, exprs_values = "logcounts_raw")
+dim(reducedDim(umi, "PCA"))
+```
+
+    ## [1] 864  50
+
+``` r
+plotPCA(umi, colour_by = "batch", size_by = "detected", shape_by = "individual")
+```
+
+![](part6_scRNAseq_qualitycontrol_files/figure-gfm/unnamed-chunk-38-1.png)<!-- -->
+Note: **Log-transformation is NOT ENOUGH to account for different
+technical factors between the cells, e.g., sequencing depth. Use
+`logcounts` instead of `logcounts_raw`, because `logcounts` are
+log-transformed AND normalized by library size (e.g., counts per
+million).** Keep in mind we haven’t filtered for cells that may be
+doublets either. We’re using logcounts_raw for demo only.
+
+Now we’ll do PCA on the umi.qc dataframe:
+
+``` r
+umi.qc <- runPCA(umi.qc, exprs_values = "logcounts_raw")
+dim(reducedDim(umi.qc, "PCA"))
+```
+
+    ## [1] 670  50
+
+``` r
+plotPCA(umi.qc, colour_by = "batch", size_by = "detected", shape_by = "individual")
+```
+
+![](part6_scRNAseq_qualitycontrol_files/figure-gfm/unnamed-chunk-40-1.png)<!-- -->
+
+Only the top 500 *most variable genes* are used to calculate the PCA by
+the `scater` package. We can adjust this.
+
+PCA when we use all detected genes:
+
+``` r
+umi.qc <- runPCA(umi.qc, exprs_values = "logcounts_raw", ntop=nrow(umi.qc))
+dim(reducedDim(umi.qc, "PCA"))
+```
+
+    ## [1] 670  50
+
+``` r
+plotPCA(umi.qc, colour_by = "batch", size_by = "detected", shape_by = "individual")
+```
+
+![](part6_scRNAseq_qualitycontrol_files/figure-gfm/unnamed-chunk-42-1.png)<!-- -->
+
+PCA when we use only the top 50 genes
+
+``` r
+umi.qc <- runPCA(umi.qc, exprs_values = "logcounts_raw", ntop=50)
+```
+
+    ## Warning in check_numbers(k = k, nu = nu, nv = nv, limit = min(dim(x)) - : more
+    ## singular values/vectors requested than available
+
+    ## Warning in (function (A, nv = 5, nu = nv, maxit = 1000, work = nv + 7, reorth =
+    ## TRUE, : You're computing too large a percentage of total singular values, use a
+    ## standard svd instead.
+
+    ## Warning in (function (A, nv = 5, nu = nv, maxit = 1000, work = nv + 7, reorth =
+    ## TRUE, : did not converge--results might be invalid!; try increasing work or
+    ## maxit
+
+``` r
+dim(reducedDim(umi.qc, "PCA"))
+```
+
+    ## [1] 670  49
+
+``` r
+plotPCA(umi.qc, colour_by = "batch", size_by = "detected", shape_by = "individual")
+```
+
+![](part6_scRNAseq_qualitycontrol_files/figure-gfm/unnamed-chunk-44-1.png)<!-- -->
+
+**t-distributed Stochastic Neighbor Embedding (tSNE)** combines
+dimensionality reduction with random walks on nearest-neighbor network.
+Because this is a *stochastic algorithm*, running this method multiple
+times on the same dataset will give us different plots. For
+reproducibility, set the seed for the random-number generator.
+
+[More on using tSNE plots.](https://distill.pub/2016/misread-tsne/) [The
+art of using t-SNE for single-cell
+transcriptomics](https://www.nature.com/articles/s41467-019-13056-x)
+
+What it looks like without QC:
+
+``` r
+set.seed(123456)
+umi <- runTSNE(umi, exprs_values = "logcounts_raw", perplexity = 130)
+plotTSNE(umi, colour_by = "batch", size_by = "detected", shape_by = "individual")
+```
+
+![](part6_scRNAseq_qualitycontrol_files/figure-gfm/unnamed-chunk-45-1.png)<!-- -->
+
+What it looks like post-QC:
+
+``` r
+set.seed(123456)
+umi.qc <- runTSNE(umi.qc, exprs_values = "logcounts_raw", perplexity = 130)
+plotTSNE(umi.qc, colour_by = "batch", size_by = "detected", shape_by = "individual")
+```
+
+![](part6_scRNAseq_qualitycontrol_files/figure-gfm/unnamed-chunk-46-1.png)<!-- -->
+
+Based on these plots, I am inclined to think there are significant
+differences between individuals in terms of transcriptomic profiles of
+their iPSCs. But it’s hard to interpret these without any external
+references/ground truths (for example, stem cell markers like OCT4,
+NANOG, SOX2).
+
+t-SNE plot when perplexity is changed to 10.
+
+``` r
+set.seed(123456)
+umi.qc <- runTSNE(umi.qc, exprs_values = "logcounts_raw", perplexity = 10)
+plotTSNE(umi.qc, colour_by = "batch", size_by = "detected", shape_by = "individual")
+```
+
+![](part6_scRNAseq_qualitycontrol_files/figure-gfm/unnamed-chunk-47-1.png)<!-- -->
+
+t-SNE plot when perplexity is changed to 200.
+
+``` r
+set.seed(123456)
+umi.qc <- runTSNE(umi.qc, exprs_values = "logcounts_raw", perplexity = 200)
+plotTSNE(umi.qc, colour_by = "batch", size_by = "detected", shape_by = "individual")
+```
+
+![](part6_scRNAseq_qualitycontrol_files/figure-gfm/unnamed-chunk-48-1.png)<!-- -->
+
+### Confounding Factors
+
+Challenge: it’s hard to have a *true* technical replicate to distinguish
+*biological* and *technical* variability.
+
+``` r
+umi.qc <- runPCA(umi.qc, exprs_values = "logcounts_raw")
+dim(reducedDim(umi.qc, "PCA"))
+```
+
+    ## [1] 670  50
+
+``` r
+plotPCA(umi.qc, colour_by = "batch", size_by = "sum", shape_by = "individual")
+```
+
+![](part6_scRNAseq_qualitycontrol_files/figure-gfm/unnamed-chunk-50-1.png)<!-- -->
+
+With `scater`, we can test whether experimental and QC variables
+correlate with any of the principal components.
+
+``` r
+logcounts(umi.qc) <- assay(umi.qc, "logcounts_raw")
+getExplanatoryPCs(umi.qc, variables = "sum")
+```
+
+    ##               sum
+    ## PC1  8.663881e+01
+    ## PC2  5.690790e+00
+    ## PC3  1.709315e-01
+    ## PC4  4.580131e-01
+    ## PC5  1.923186e-04
+    ## PC6  6.803561e-01
+    ## PC7  1.057606e-01
+    ## PC8  2.044205e-01
+    ## PC9  5.652119e-01
+    ## PC10 4.717890e-03
+
+``` r
+plotExplanatoryPCs(umi.qc, variables = "sum")
+```
+
+![](part6_scRNAseq_qualitycontrol_files/figure-gfm/unnamed-chunk-52-1.png)<!-- -->
+
+``` r
+logcounts(umi.qc) <- NULL
+```
+
+PC1 is almost completely (86%) explained by the total UMI counts
+(sequencing depth).
+
+Explanatory variables
+
+``` r
+plotExplanatoryVariables(umi.qc,exprs_values = "logcounts_raw", 
+                         variables = c("detected", "sum", "batch", "individual", "altexps_ERCC_percent", "subsets_Mito_percent"))
+```
+
+![](part6_scRNAseq_qualitycontrol_files/figure-gfm/unnamed-chunk-54-1.png)<!-- -->
+
+This confirms/reemphasized the impact of the number of genes detected
+and number of counts, hence these can be conditioned out in a
+normalization step, or making sure they’re accounted for in downstream
+statistical models. The plot above also shows that the batch explains
+more than the individual. (Remember the earlier note about how it’s hard
+to get *true* technical replicates.)
+
+More confounders to consider: are cells dying? are cells replicating?
+what sequencing protocols were used, and what was the coverage like? was
+there a bias of more A/T nucleotides being used vs. G/C in the
+transcripts?
+
+A method for identifying and subtracting cell cycle or apoptosis:
+[scLVM](https://github.com/PMBio/scLVM)
+
+### Normalization
+
+`scater` has `normaliseExprs()` that takes the expression matrix and a
+design matrix.
+
+Size-factor normalization: correct for library size, remove effects of
+some confounders and explanatory variables.
+
+Some, not all, quantification methods incorporate library size when
+determining gene expression, e.g., `Cufflinks`, `RSEM`. For these, we
+don’t need to add a step to normalize for libary size.
+
+Normalization factor: estimate of the library size relative to the other
+cells. Some that work for bulk RNA-seq can also work for scRNA-seq, such
+as upper quartile (UQ), CPM, RPKM, FPKM, TPM.
+
+More ways to normalize: relative log expression (RLE), trimmed mean of
+M-values (TMM) (assign one cell as a reference, assumption: most genes
+are not differentially expressed), `scran` (CPM specialized for single
+cell by pooling cells to calculate a normalization factor), downsampling
+(usually need to downsample datasets multiple rounds).
+
+``` r
+suppressPackageStartupMessages(library(scRNA.seq.funcs))
+suppressPackageStartupMessages(library(scater))
+suppressPackageStartupMessages(library(scran))
+
+set.seed(1234567)
+umi <- readRDS("course/data/tung/umi.rds")
+umi.qc <- umi[! rowData(umi)$discard, ! colData(umi)$discard]
+```
+
+PCA on logcounts_raw
+
+``` r
+umi.qc <- runPCA(umi.qc, exprs_values = "logcounts_raw")
+plotPCA(umi.qc, colour_by = "batch", size_by = "detected", shape_by = "individual")
+```
+
+![](part6_scRNAseq_qualitycontrol_files/figure-gfm/unnamed-chunk-56-1.png)<!-- -->
+
+PCA on CPM-normalized data
+
+``` r
+logcounts(umi.qc) <- log2(calculateCPM(umi.qc) + 1)
+umi.qc <- runPCA(umi.qc)
+plotPCA(umi.qc, colour_by = "batch", size_by = "detected", shape_by = "individual")
+```
+
+![](part6_scRNAseq_qualitycontrol_files/figure-gfm/unnamed-chunk-57-1.png)<!-- -->
+
+RLE plots can be useful to assess whether normalization was successful.
+
+``` r
+plotRLE(umi.qc, exprs_values = "logcounts_raw", colour_by = "batch") + ggtitle("RLE plot for logcounts_raw")
+```
+
+![](part6_scRNAseq_qualitycontrol_files/figure-gfm/unnamed-chunk-58-1.png)<!-- -->
+
+``` r
+plotRLE(umi.qc, exprs_values = "logcounts", colour_by = "batch") + ggtitle("RLE plot for log2(CPM) counts")
+```
+
+![](part6_scRNAseq_qualitycontrol_files/figure-gfm/unnamed-chunk-59-1.png)<!-- -->
+
+PCA on `scran`-normalized data.
+
+`scran` uses clustering to make normalization, also referred to as
+“normalization by deconvolution”.
+
+``` r
+qclust <- quickCluster(umi.qc, min.size = 30)
+table(qclust)
+```
+
+    ## qclust
+    ##  1  2  3  4  5  6  7  8 
+    ## 86 77 81 94 90 88 66 88
+
+Compute size factors using clusters.
+
+``` r
+umi.qc <- computeSumFactors(umi.qc, clusters = qclust)
+```
+
+    ## Warning in .guessMinMean(x, min.mean = min.mean, BPPARAM = BPPARAM): assuming
+    ## UMI data when setting 'min.mean'
+
+``` r
+umi.qc <- logNormCounts(umi.qc)
+```
+
+``` r
+umi.qc <- runPCA(umi.qc)
+plotPCA(umi.qc, colour_by = "batch", size_by = "detected", shape_by = "individual")
+```
+
+![](part6_scRNAseq_qualitycontrol_files/figure-gfm/unnamed-chunk-63-1.png)<!-- -->
+
+``` r
+plotRLE(umi.qc, exprs_values = "logcounts", colour_by = "batch")
+```
+
+![](part6_scRNAseq_qualitycontrol_files/figure-gfm/unnamed-chunk-64-1.png)<!-- -->
+
+check the size factors computed by `scran`
+
+``` r
+summary(sizeFactors(umi.qc))
+```
+
+    ##    Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+    ##  0.3821  0.7710  0.9524  1.0000  1.1490  3.2732
+
+PCA with downsampled data
+
+``` r
+logcounts(umi.qc) <- log2(Down_Sample_Matrix(counts(umi.qc)) + 1)
+umi.qc <- runPCA(umi.qc)
+plotPCA(umi.qc, colour_by = "batch", size_by = "detected", shape_by = "individual")
+```
+
+![](part6_scRNAseq_qualitycontrol_files/figure-gfm/unnamed-chunk-66-1.png)<!-- -->
+
+``` r
+plotRLE(umi.qc, exprs_values = "logcounts", colour_by = "batch")
+```
+
+![](part6_scRNAseq_qualitycontrol_files/figure-gfm/unnamed-chunk-67-1.png)<!-- -->
+
+### Dealing with confounders
+
+**BATCH CORRECTION.**
+
+Two scenarios for scRNA-seq: (1) expect cell composition to be the same,
+methods developed for bulk RNA-seq perform well. often true for
+biological replicates in the same experiment. (2) overlap between
+datasets is partial, e.g., if dataset has healthy and disease tissue,
+which can differ in cell type composition. for this, mutual nearest
+neighbor (MNN)-based methods tend to perform better.
+
+``` r
+# suppressPackageStartupMessages(library(scRNA.seq.funcs))
+# suppressPackageStartupMessages(library(scater))
+# suppressPackageStartupMessages(library(scran))
+suppressPackageStartupMessages(library(sva))
+suppressPackageStartupMessages(library(batchelor))
+suppressPackageStartupMessages(library(kBET))
+
+set.seed(1234567)
+```
+
+Load and normalize the Tung dataset.
+
+``` r
+umi <- readRDS("course/data/tung/umi.rds")
+umi.qc <- umi[! rowData(umi)$discard, ! colData(umi)$discard]
+qclust <- quickCluster(umi.qc, min.size = 30)
+umi.qc <- computeSumFactors(umi.qc, clusters = qclust)
+```
+
+    ## Warning in .guessMinMean(x, min.mean = min.mean, BPPARAM = BPPARAM): assuming
+    ## UMI data when setting 'min.mean'
+
+``` r
+umi.qc <- logNormCounts(umi.qc)
+```
+
+Using `ComBat` to eliminate batch effects.
+
+``` r
+assay(umi.qc, "combat") <- ComBat(logcounts(umi.qc), batch = umi.qc$replicate)
+```
+
+    ## Found 40 genes with uniform expression within a single batch (all zeros); these will not be adjusted for batch.
+
+    ## Found3batches
+
+    ## Adjusting for0covariate(s) or covariate level(s)
+
+    ## Standardizing Data across genes
+
+    ## Fitting L/S model and finding priors
+
+    ## Finding parametric adjustments
+
+    ## Adjusting the Data
+
+ComBat correction accounting for total features as a co-variate. (from
+`sva`)
+
+``` r
+assay(umi.qc, "combat_tf") <- ComBat(logcounts(umi.qc), batch = umi.qc$detected)
+```
+
+    ## Found 9416 genes with uniform expression within a single batch (all zeros); these will not be adjusted for batch.
+
+    ## Using the 'mean only' version of ComBat
+
+    ## Found609batches
+
+    ## Note: one batch has only one sample, setting mean.only=TRUE
+
+    ## Adjusting for0covariate(s) or covariate level(s)
+
+    ## Standardizing Data across genes
+
+    ## Fitting L/S model and finding priors
+
+    ## Finding parametric adjustments
+
+    ## Adjusting the Data
+
+MNN (`batchelor`)
+
+``` r
+mnn_out <- fastMNN(umi.qc, batch = umi.qc$replicate)
+assay(umi.qc, "mnn") <- assay(mnn_out, "reconstructed")
+```
+
+**Evaluate and compare batch-removal approaches**
+
+Which method is most effective? Tricky because of what is a technical
+confounder vs. what is interesting biological variability. At the end of
+the day, it depends on the biological question we’re asking.
+
+Evaluate effectiveness of normalization methods by inspecting the PCA
+plot.
+
+``` r
+for(n in assayNames(umi.qc)) {
+  tmp <- runPCA(umi.qc, exprs_values = n, ncomponents = 20)
+  
+  print(
+    plotPCA(
+      tmp,
+      colour_by = "batch",
+      size_by = "detected",
+      shape_by = "individual"
+    ) +
+    ggtitle(n)
+  )
+}
+```
+
+![](part6_scRNAseq_qualitycontrol_files/figure-gfm/unnamed-chunk-74-1.png)<!-- -->![](part6_scRNAseq_qualitycontrol_files/figure-gfm/unnamed-chunk-74-2.png)<!-- -->![](part6_scRNAseq_qualitycontrol_files/figure-gfm/unnamed-chunk-74-3.png)<!-- -->![](part6_scRNAseq_qualitycontrol_files/figure-gfm/unnamed-chunk-74-4.png)<!-- -->![](part6_scRNAseq_qualitycontrol_files/figure-gfm/unnamed-chunk-74-5.png)<!-- -->![](part6_scRNAseq_qualitycontrol_files/figure-gfm/unnamed-chunk-74-6.png)<!-- -->
+
+Can also examine effectiveness with RLE.
+
+``` r
+res <- list()
+for(n in assayNames(umi.qc)) {
+  res[[n]] <- suppressWarnings(calc_cell_RLE(assay(umi.qc, n)))
+}
+par(mar=c(6, 4, 1, 1))
+boxplot(res, las=2)
+```
+
+![](part6_scRNAseq_qualitycontrol_files/figure-gfm/unnamed-chunk-75-1.png)<!-- -->
+
+Examine effectiveness by considering intermingling of points from
+different batches in local subsamples of the data. If there are no
+batch-effects: proportion of cells from each batch in any local region
+should be equal to the global proportion of cells in each batch.
+
+`kBET` can only be applied if a perfectly balanced design has been used.
+
+``` r
+compare_kBET_results <- function(sce){
+  sce <- umi.qc
+  indiv <- unique(as.character(sce$individual))
+  norms <- assayNames(sce) # get all the normalizations
+  results <- list()
+  for (i in indiv){
+    for (j in norms){
+      tmp <- kBET(
+        df = t(assay(sce[, sce$individual == i], j)),
+        batch = sce$batch[sce$individual == i],
+        heuristic = TRUE,
+        verbose = FALSE,
+        addTest = FALSE,
+        plot = FALSE
+      )
+      results[[i]][[j]] <- tmp$summary$kBET.observed[1]
+    }
+  }
+  return(do.call(rbind.data.frame, results))
+}
+
+eff_debatching <- compare_kBET_results(umi.qc)
+eff_debatching
+```
+
+    ##            counts logcounts_raw logcounts    combat combat_tf       mnn
+    ## NA19098 1.0000000     0.6220000 0.7264000 0.6228000 0.6632000 0.4596000
+    ## NA19101 0.4268000     0.4492000 0.8120000 0.7832000 0.7488000 0.7312000
+    ## NA19239 0.7055556     0.6851852 0.8918519 0.8688889 0.8240741 0.8814815
+
+Visualize the output of kBET calculation.
+
+``` r
+suppressPackageStartupMessages(library("reshape2"))
+suppressPackageStartupMessages(library("RColorBrewer"))
+
+dod <- melt(as.matrix(eff_debatching), value.name = "kBET")
+colnames(dod)[1:2] <- c("Normalization", "Individual")
+
+colorset <- c("gray", brewer.pal(n = 9, "RdYlBu"))
+
+ggplot(dod, aes(Normalization, Individual, fill=kBET)) +
+  geom_tile() +
+  scale_fill_gradient2(
+    na.value = "gray",
+    low = colorset[2],
+    mid = colorset[6],
+    high = colorset[10],
+    midpoint = 0.5, limit = c(0,1)
+  ) +
+  scale_x_discrete(expand = c(0,0)) +
+  scale_y_discrete(expand = c(0,0)) +
+  theme(
+    axis.text.x = element_text(
+      angle = 45,
+      vjust = 1,
+      size = 12,
+      hjust = 1
+    )
+  ) +
+  ggtitle("Effect of batch regression methods per individual")
+```
+
+![](part6_scRNAseq_qualitycontrol_files/figure-gfm/unnamed-chunk-77-1.png)<!-- -->
+
+### Up next: Biological Analysis
