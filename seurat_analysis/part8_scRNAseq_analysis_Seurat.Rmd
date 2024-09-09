@@ -1,0 +1,450 @@
+---
+title: "scRNA-seq analysis with Seurat"
+output: rmarkdown::github_document
+date: "2024-09-08"
+---
+
+Load libraries
+```{r}
+suppressPackageStartupMessages(library(Seurat))
+suppressPackageStartupMessages(library(ggplot2))
+suppressPackageStartupMessages(library(SingleR))
+suppressPackageStartupMessages(library(dplyr))
+suppressPackageStartupMessages(library(celldex))
+suppressPackageStartupMessages(library(RColorBrewer))
+suppressPackageStartupMessages(library(SingleCellExperiment))
+```
+
+### Basic quality control and filtering
+
+Prior to analysis: (1) ambient RNA correction with `soupX`, (2) doublet detection with `scrublet`.
+
+Read `soupX`-corrected matrices.
+```{r}
+adj.matrix <- Read10X("course/data/update/soupX_pbmc10k_filt")
+```
+
+Make `Seurat` object. "samples" = number of cells; "features" = genes.
+```{r}
+srat <- CreateSeuratObject(adj.matrix, project = "pbmc10k")
+srat
+```
+
+Since we're using the `Seurat` object for downstream analysis, we can erase `adj.matrix` to save RAM.
+
+```{r}
+remove(adj.matrix)
+gc()
+```
+
+Take a closer look at the `Seurat` object.
+```{r}
+str(srat)
+```
+
+Define mitochondrial genes and genes encoding ribosomal proteins.
+```{r}
+srat[["percent.mt"]] <- PercentageFeatureSet(srat, pattern = "^MT-")
+srat[["percent.rb"]] <- PercentageFeatureSet(srat, pattern = "^RP[SL]")
+```
+
+Add doublet annotation.
+```{r}
+doublets <- read.table("course/data/update/scrublet_calls.tsv", header=F, row.names=1)
+colnames(doublets) <- c("Doublet_score", "Is_doublet")
+srat <- AddMetaData(srat, doublets)
+head(srat[[]])
+```
+Remove doublets because we're not using it anymore
+```{r}
+remove(doublets)
+gc()
+```
+
+Violin plots of selected metadata features.
+```{r}
+VlnPlot(srat, 
+        features = c("nFeature_RNA", "nCount_RNA", "percent.mt", "percent.rb"),
+        ncol = 4,
+        pt.size = 0.1) &
+  theme(plot.title = element_text(size=10))
+```
+Any correlation between metadata features?
+```{r}
+FeatureScatter(srat, feature1 = "nCount_RNA", feature2 = "percent.mt")
+```
+```{r}
+FeatureScatter(srat, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+```
+```{r}
+FeatureScatter(srat, feature1 = "nCount_RNA", feature2 = "percent.rb")
+```
+```{r}
+FeatureScatter(srat, feature1 = "percent.rb", feature2 = "percent.mt")
+```
+```{r}
+FeatureScatter(srat, feature1 = "nFeature_RNA", feature2 = "Doublet_score")
+```
+
+Set QC column in metadata
+```{r}
+srat[['QC']] <- ifelse(srat@meta.data$Is_doublet == 'True', 'Doublet', 'Pass')
+srat[['QC']] <- ifelse(srat@meta.data$nFeature_RNA < 500 & srat@meta.data$QC == 'Pass','Low_nFeature', srat@meta.data$QC)
+srat[['QC']] <- ifelse(srat@meta.data$nFeature_RNA < 500 & srat@meta.data$QC != 'Pass' & srat@meta.data$QC != 'Low_nFeature', paste('Low_nFeature', srat@meta.data$QC, sep = ','), srat@meta.data$QC)
+srat[['QC']] <- ifelse(srat@meta.data$percent.mt > 15 & srat@meta.data$QC == 'Pass','High_MT',srat@meta.data$QC)
+srat[['QC']] <- ifelse(srat@meta.data$nFeature_RNA < 500 & srat@meta.data$QC != 'Pass' & srat@meta.data$QC != 'High_MT',paste('High_MT',srat@meta.data$QC,sep = ','),srat@meta.data$QC)
+table(srat[['QC']])
+```
+Plot only cells that pass (tentative) QC:
+```{r}
+VlnPlot(subset(srat, subset = QC == 'Pass'), 
+        features = c("nFeature_RNA", "nCount_RNA", "percent.mt", "percent.rb"), 
+        ncol = 4,
+        pt.size = 0.1) &
+  theme(plot.title = element_text(size=10))
+```
+
+### Normalization, dimensionality reduction
+
+Conventional way to normalize data: scale as if all cells have 10K UMIs overall, and log2-transform the values.
+```{r}
+srat <- NormalizeData(srat)
+```
+
+Find most variable features (genes).
+```{r}
+srat <- FindVariableFeatures(srat, selection.method = "vst", nfeatures = 2000)
+```
+
+Show the top 10 most highly variable genes.
+```{r}
+top10 <- head(VariableFeatures(srat), 10)
+top10
+```
+
+```{r}
+plot1 <- VariableFeaturePlot(srat)
+LabelPoints(plot = plot1, points = top10, repel = TRUE, xnudge = 0, ynudge = 0)
+```
+
+Before running PCA, need to scale data to Z-scores. 
+```{r}
+all.genes <- rownames(srat)
+srat <- ScaleData(srat, features = all.genes)
+```
+
+PCA on 2000 most variable genes (default setting).
+```{r}
+srat <- RunPCA(srat, features = VariableFeatures(object = srat))
+```
+
+Expectation for "well-behaved" datasets: PC "loadings" match markers of distinct populations (in this case, cell types).
+```{r}
+VizDimLoadings(srat, dims = 1:9, reduction = "pca") & 
+  theme(axis.text=element_text(size=5), axis.title=element_text(size=8,face="bold"))
+```
+
+Can also visualize these as heatmaps.
+```{r}
+DimHeatmap(srat, dims = 1:6, nfeatures = 20, cells = 500, balanced = T)
+```
+
+DimPlot is used to visualize all reduced representations. It tries UMAP, then t-SNE, then PCA.
+```{r}
+DimPlot(srat, reduction = "pca")
+```
+
+How many PCs can be used without (too) much information loss?
+```{r}
+ElbowPlot(srat)
+```
+
+Onto clustering. Higher resolution = more clusters (typically). It's important to find the correct cluster resolution because cell type markers depend on cluster definition.
+```{r}
+srat <- FindNeighbors(srat, dims = 1:10)
+```
+
+```{r}
+srat <- FindClusters(srat, resolution = 0.5)
+```
+
+```{r}
+srat <- RunUMAP(srat, dims = 1:10, verbose = F)
+```
+Check cluster sizes (how many cells in a particular cluster). The *active identity* is reset to "seurat_clusters" in metadata.
+```{r}
+table(srat@meta.data$seurat_clusters)
+```
+
+```{r}
+DimPlot(srat, label.size = 4, repel = T, label = T)
+```
+
+Beware of clustering artifacts! Look at two minor cell populations: (1) dendritic cells (DCs) and (2) platelets. Visualize known markers for these cells: DCs express LILRA4, TPM2; platelets express PPBP, GP1BB.
+```{r}
+FeaturePlot(srat, features = c("LILRA4", "TPM2", "PPBP", "GP1BB"))
+```
+
+Visualize other confounders.
+```{r}
+FeaturePlot(srat, features = "Doublet_score") & theme(plot.title = element_text(size=10))
+```
+
+```{r}
+FeaturePlot(srat, features = "percent.mt") & theme(plot.title = element_text(size=10))
+```
+
+```{r}
+FeaturePlot(srat, features = "nFeature_RNA") & theme(plot.title = element_text(size=10))
+```
+
+Remove the cells that did not pass QC and compare to earlier plot.
+```{r}
+srat <- subset(srat, subset = QC == 'Pass')
+DimPlot(srat,label.size = 4,repel = T,label = T)
+```
+
+Do some housekeeping so R doesn't break.
+```{r}
+remove(all.genes)
+gc()
+```
+
+Calculate cell cycle scores.
+```{r}
+s.genes <- cc.genes.updated.2019$s.genes
+g2m.genes <- cc.genes.updated.2019$g2m.genes
+
+srat <- CellCycleScoring(srat, s.features = s.genes, g2m.features = g2m.genes) # note this will only run on normalized data
+table(srat[[]]$Phase)
+```
+
+Clean up some more.
+```{r}
+remove(s.genes)
+remove(g2m.genes)
+gc()
+```
+
+Check if any of the clusters are defined by technical differences.
+```{r}
+FeaturePlot(srat,features = "percent.mt",label.size = 4,repel = T,label = T) & 
+  theme(plot.title = element_text(size=10))
+```
+
+```{r}
+VlnPlot(srat, features = "percent.mt") & theme(plot.title = element_text(size = 10))
+```
+
+```{r}
+FeaturePlot(srat,features = "percent.rb",label.size = 4,repel = T,label = T) & theme(plot.title = element_text(size=10))
+```
+
+```{r}
+VlnPlot(srat,features = "percent.rb") & theme(plot.title = element_text(size=10))
+```
+
+```{r}
+VlnPlot(srat,features = c("nCount_RNA","nFeature_RNA")) & 
+  theme(plot.title = element_text(size=10))
+```
+
+```{r}
+FeaturePlot(srat,features = c("S.Score","G2M.Score"),label.size = 4,repel = T,label = T) & 
+  theme(plot.title = element_text(size=10))
+```
+
+```{r}
+VlnPlot(srat,features = c("S.Score","G2M.Score")) & 
+  theme(plot.title = element_text(size=10))
+```
+
+### SCTransform normalization and clustering
+
+Single SCTransform command replaces `NormalizeData`, `ScaleData`, and `FindVariableFeatures`.
+Also correct for % mitochondrial genes and cell cycle scores using `vars.to.regress`.
+```{r}
+srat <- SCTransform(srat, method = "glmGamPoi", ncells = 8824, 
+                    vars.to.regress = c("percent.mt", "S.Score", "G2M.Score"), verbose = F)
+srat
+```
+
+PCA, UMAP, and clustering.
+```{r}
+srat <- RunPCA(srat, verbose = F)
+srat <- RunUMAP(srat, dims = 1:30, verbose = F)
+srat <- FindNeighbors(srat, dims = 1:30, verbose = F)
+srat <- FindClusters(srat, verbose = F)
+table(srat[[]]$seurat_clusters)
+```
+
+```{r}
+DimPlot(srat, label=T)
+```
+
+Check that clusters seem *reasonable* by visualizing where certain cell type markers are, e.g., dendritic cells (PPBP, LILRA4). 
+```{r}
+FeaturePlot(srat,"PPBP") & 
+  scale_colour_gradientn(colours = rev(brewer.pal(n = 11, name = "Spectral")))
+```
+```{r}
+FeaturePlot(srat,"LILRA4") & 
+  scale_colour_gradientn(colours = rev(brewer.pal(n = 11, name = "Spectral")))
+```
+
+```{r}
+srat <- FindNeighbors(srat, dims = 1:30, k.param = 15, verbose = F)
+```
+
+```{r, warning=FALSE}
+srat <- FindClusters(srat, verbose = F, algorithm = 4, resolution = 0.9, method = "igraph")
+gc()
+```
+
+```{r}
+table(srat[[]]$seurat_clusters)
+```
+
+```{r}
+DimPlot(srat, label = T)
+```
+
+Use more cell type markers to identify clusters.
+```{r}
+FeaturePlot(srat,"MS4A1") + 
+  scale_colour_gradientn(colours = rev(brewer.pal(n = 11, name = "Spectral"))) + ggtitle("MS4A1: B cells")
+```
+
+```{r}
+FeaturePlot(srat,"LYZ") + 
+  scale_colour_gradientn(colours = rev(brewer.pal(n = 11, name = "Spectral"))) + ggtitle("LYZ: monocytes")
+```
+
+```{r}
+FeaturePlot(srat,"NKG7") + 
+  scale_colour_gradientn(colours = rev(brewer.pal(n = 11, name = "Spectral"))) + ggtitle("NKG7: natural killers")
+```
+
+```{r}
+FeaturePlot(srat,"CD8B") + 
+  scale_colour_gradientn(colours = rev(brewer.pal(n = 11, name = "Spectral"))) + ggtitle("CD8B: CD8 T cells")
+```
+
+```{r}
+FeaturePlot(srat,"IL7R") + 
+  scale_colour_gradientn(colours = rev(brewer.pal(n = 11, name = "Spectral"))) + ggtitle("IL7R: CD4 T cells")
+```
+
+### Differential expression and marker selection
+
+It's recommended to do DE analysis on the `RNA` and not the `SCTransform` data.
+Can do DE between two clusters, or one cluster vs the rest of the cells.
+
+Set active assay back to RNA, redo normalization and scaling. [Interesting that we need to go back and forth between the RNA and SCTransform data. This seems inefficient to me.]
+```{r}
+DefaultAssay(srat) <- "RNA"
+srat <- NormalizeData(srat)
+gc()
+```
+
+```{r}
+srat <- FindVariableFeatures(srat, selection.method = "vst", nfeatures = 2000)
+gc()
+```
+
+```{r}
+srat <- ScaleData(srat, features = rownames(srat))
+gc()
+```
+
+Find markers for every cluster. Modify only.pos, min.pct and logfc.threshold as needed.
+```{r}
+all.markers <- FindAllMarkers(srat, only.pos = T, min.pct = 0.5, logfc.threshold = 0.5)
+```
+
+```{r}
+dim(all.markers)
+```
+
+```{r}
+gc()
+```
+
+```{r}
+table(all.markers$cluster)
+```
+
+```{r}
+top3_markers <- as.data.frame(all.markers %>% group_by(cluster) %>% top_n(n = 3, wt = avg_log2FC))
+top3_markers
+```
+
+### Cell type annotation using SingleR
+
+Get reference datasets.
+```{r}
+monaco.ref <- celldex::MonacoImmuneData()
+
+# other references to try in the future
+# hpca.ref <- celldex::HumanPrimaryCellAtlasData()
+# dice.ref <- celldex::DatabaseImmuneCellExpressionData()
+```
+
+Convert `Seurat` object to `sce` object.
+```{r}
+sce <- as.SingleCellExperiment(DietSeurat(srat))
+sce
+```
+
+Annotate.
+```{r}
+monaco.main <- SingleR(test = sce,assay.type.test = 1,ref = monaco.ref,labels = monaco.ref$label.main)
+monaco.fine <- SingleR(test = sce,assay.type.test = 1,ref = monaco.ref,labels = monaco.ref$label.fine)
+```
+
+```{r}
+gc()
+```
+
+```{r}
+table(monaco.main$pruned.labels)
+```
+
+```{r}
+table(monaco.fine$pruned.labels)
+```
+
+Add annotations to `Seurat` object.
+```{r}
+srat@meta.data$monaco.main <- monaco.main$pruned.labels
+srat@meta.data$monaco.fine <- monaco.fine$pruned.labels
+```
+
+Visualize clusters with cell annotations.
+```{r}
+srat <- SetIdent(srat, value = "monaco.fine")
+DimPlot(srat, label = T , repel = T, label.size = 3) + NoLegend()
+```
+
+```{r}
+FeaturePlot(srat,"CD38") + scale_colour_gradientn(colours = rev(brewer.pal(n = 11, name = "Spectral")))
+```
+
+```{r}
+FeaturePlot(srat,"CD59") + scale_colour_gradientn(colours = rev(brewer.pal(n = 11, name = "Spectral")))
+```
+
+Cluster 13 supposedly consists of MAIT cells. Check where its markers KLRB1 and CXCR6.
+```{r}
+FeaturePlot(srat,"KLRB1") + scale_colour_gradientn(colours = rev(brewer.pal(n = 11, name = "Spectral")))
+```
+
+```{r}
+FeaturePlot(srat,"CXCR6") + scale_colour_gradientn(colours = rev(brewer.pal(n = 11, name = "Spectral")))
+```
+
+### Session info 
+
+```{r}
+sessionInfo()
+```

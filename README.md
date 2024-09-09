@@ -4,12 +4,18 @@ Recreating analyses and visualizations from fun papers featuring scRNA-seq. Foll
 
 ## [Quality Control](quality_control/part6_scRNAseq_qualitycontrol.md)
 
-- **Separation of ERCC Spike-Ins and UMIs**: The dataset was divided into main data (UMIs) and ERCC spike-ins using the `altExp` function to handle them separately in downstream analysis.
+- **Separation of Spike-Ins and Gene Filtering**: Used the `altExp` function to separate spike-ins from main data (UMIs) and removed genes detected in fewer than two cells, ensuring the dataset was streamlined for further analysis.
 
-- **Gene Annotation and Quality Control**: ENSEMBL IDs were mapped to gene symbols, and non-matching genes were removed. Mitochondrial and ribosomal genes were identified and analyzed, ensuring accurate annotation.
+- **Gene Annotation and Quality Control**: Mapped ENSEMBL IDs to gene symbols, removed non-matching genes, and calculated key QC metrics like UMI counts, gene detection, and mitochondrial content to filter out low-quality cells.
 
-- **Quality Metrics Calculation**: Key QC metrics like total UMI counts, detected genes, and mitochondrial content were calculated per cell, and threshold-based filtering identified low-quality cells (e.g., low gene detection, high mitochondrial percentage).
+- **Dimensionality Reduction and Batch Correction**: Applied PCA and tSNE for dimensionality reduction and normalization techniques like CPM and scran, correcting for batch effects and visualizing data distribution.
 
-- **Outlier Detection**: Cells were filtered based on outlier criteria using the `isOutlier` function, focusing on factors like library size, number of detected features, and mitochondrial content. A total of 194 cells were flagged for removal.
 
-- **Gene Filtering and Log-Transformation**: Genes detected in fewer than two cells were discarded, reducing the dataset. The remaining gene expression data were log-transformed and saved for further analysis.
+## [Seurat Analysis](seurat_analysis/part8_scRNAseq_analysis_Seurat.md)
+
+- **Basic Quality Control and Filtering**: Corrected ambient RNA using `soupX` and detected doublets with `scrublet`. Mitochondrial and ribosomal gene percentages were calculated, and doublet annotations were added for further quality control. Violin and scatter plots were generated to assess correlations between metadata features.
+
+- **Normalization and Dimensionality Reduction**: Normalized data using log-transformation, identified highly variable genes, and performed PCA for dimensionality reduction. Data visualization techniques such as heatmaps and elbow plots were used to assess PC contributions, followed by clustering and UMAP for cell-type identification.
+
+- **SCTransform Normalization and Clustering**: Applied SCTransform to correct for mitochondrial gene percentages and cell cycle scores, replacing traditional normalization steps. After dimensionality reduction with PCA and UMAP, clusters were identified, and key cell-type markers were visualized to validate cluster definitions.
+
